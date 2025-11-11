@@ -1,0 +1,385 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>PMTR — Painel de Monitoramento em Tempo Real</title>
+  <link href="https://cdn.jsdelivr.net/npm/normalize.css@8.0.1/normalize.css" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <style>
+    :root{--bg:#0f1724;--card:#0b1220;--muted:#99a0b4;--accent:#38bdf8;--glass:rgba(255,255,255,0.03)}
+    html,body{height:100%;background:linear-gradient(180deg,#071022 0%, #07182a 100%);font-family:Inter,system-ui,Segoe UI,Roboto,'Helvetica Neue',Arial;color:#e6eef8;margin:0}
+    .app{max-width:1200px;margin:20px auto;padding:18px}
+    header{display:flex;gap:16px;align-items:center}
+    h1{font-size:20px;margin:0}
+    .controls{display:flex;gap:8px;margin-top:12px;flex-wrap:wrap}
+    select,input,button{background:var(--card);border:1px solid rgba(255,255,255,0.04);color:inherit;padding:8px 10px;border-radius:8px}
+    .grid{display:grid;grid-template-columns:1fr 420px;gap:16px;margin-top:18px}
+    .card{background:var(--card);border-radius:12px;padding:12px;box-shadow:0 6px 18px rgba(3,7,18,0.6)}
+    .small{font-size:13px;color:var(--muted)}
+    .live-indicator{display:inline-flex;align-items:center;gap:8px}
+    .dot{width:10px;height:10px;border-radius:50%;background:#ef4444;box-shadow:0 0 10px #ef4444}
+    table{width:100%;border-collapse:collapse;margin-top:8px}
+    th,td{padding:8px;text-align:left;border-bottom:1px dashed rgba(255,255,255,0.03);font-size:13px}
+    .muted{color:var(--muted)}
+    .positive{color:#34d399}
+    .negative{color:#fb7185}
+    .toolbar{display:flex;gap:8px;align-items:center}
+    .chart-wrap{height:260px}
+    footer{margin-top:18px;color:var(--muted);font-size:12px}
+    .badge{background:var(--glass);padding:6px 8px;border-radius:10px;font-size:12px}
+  </style>
+</head>
+<body>
+  <div class="app">
+    <header>
+      <div>
+        <h1>PMTR — Painel de Monitoramento em Tempo Real</h1>
+        <div class="small">Visualização ao vivo das negociações do dia — mock data & conectores WebSocket/REST prontos</div>
+      </div>
+      <div style="margin-left:auto;text-align:right">
+        <div class="live-indicator"><div id="wsDot" class="dot"></div><div class="small">Status: <span id="wsStatus">Desconectado</span></div></div>
+        <div class="small">Última atualização: <span id="lastUpdate">—</span></div>
+      </div>
+    </header>
+
+    <div class="controls">
+      <div class="toolbar">
+        <label class="badge">Commodity</label>
+        <select id="commodityFilter">
+          <option value="ALL">Todos</option>
+          <option value="OIL">Petróleo</option>
+          <option value="GAS">Gás</option>
+          <option value="LITHIUM">Lítio</option>
+          <option value="RARE_EARTHS">Terras Raras</option>
+          <option value="COPPER">Cobre</option>
+          <option value="SOY">Soja</option>
+          <option value="FERT">Fertilizantes</option>
+        </select>
+      </div>
+      <div class="toolbar">
+        <label class="badge">País</label>
+        <select id="countryFilter"><option value="ALL">Todos</option><option>Brasil</option><option>China</option><option>Estados Unidos</option><option>Rússia</option><option>Chile</option></select>
+      </div>
+
+      <div style="margin-left:auto;display:flex;gap:8px">
+        <button id="toggleLive">Ativar mock live</button>
+        <button id="connectWS">Conectar WS</button>
+        <button id="exportCSV">Exportar CSV</button>
+      </div>
+    </div>
+
+    <div class="grid">
+      <div>
+        <div class="card">
+          <div style="display:flex;align-items:center;justify-content:space-between">
+            <div>
+              <div class="small">Preço — último dia</div>
+              <div style="font-size:18px;margin-top:6px"><strong id="priceTitle">Índice Composite</strong></div>
+            </div>
+            <div style="text-align:right">
+              <div class="small">Variação 24h</div>
+              <div style="font-size:18px" id="priceChange">+0.00%</div>
+            </div>
+          </div>
+          <div class="chart-wrap" style="margin-top:12px">
+            <canvas id="priceChart"></canvas>
+          </div>
+        </div>
+
+        <div class="card" style="margin-top:12px">
+          <div style="display:flex;justify-content:space-between;align-items:center">
+            <div><strong>Feed de Negócios (últimas 50)</strong><div class="small">Filtro aplicável: commodities / país</div></div>
+            <div class="small">Total hoje: <span id="totalTrades">0</span></div>
+          </div>
+
+          <table id="tradeTable" aria-live="polite">
+            <thead>
+              <tr><th>Hora</th><th>Commodity</th><th>País</th><th>Volume</th><th>Preço</th><th>Contra-parte</th></tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div>
+        <div class="card">
+          <div style="display:flex;justify-content:space-between;align-items:center">
+            <div><strong>Distribuição por País (volume)</strong></div>
+            <div class="small">Top consumidores e exportadores</div>
+          </div>
+          <div style="height:220px;margin-top:8px">
+            <canvas id="countryBar"></canvas>
+          </div>
+        </div>
+
+        <div class="card" style="margin-top:12px">
+          <div style="display:flex;justify-content:space-between;align-items:center"><div><strong>Métricas-chave</strong></div><div class="small">Valores atualizados</div></div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:10px">
+            <div class="small card" style="background:rgba(255,255,255,0.02)"><div>Volume (h)</div><div style="font-size:18px" id="metricVol">0</div></div>
+            <div class="small card" style="background:rgba(255,255,255,0.02)"><div>Qtd Negócios</div><div style="font-size:18px" id="metricTrades">0</div></div>
+            <div class="small card" style="background:rgba(255,255,255,0.02)"><div>Maior Negócio</div><div style="font-size:18px" id="metricMax">—</div></div>
+            <div class="small card" style="background:rgba(255,255,255,0.02)"><div>Preço médio</div><div style="font-size:18px" id="metricAvg">—</div></div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+    <footer>
+      Painel inicial PMTR • Conector WebSocket: <code id="wsUrl">ws://<em>seu-servidor</em>/ws/pmtr</code> • Endpoints REST: <code>/api/trades</code> <br>
+      Observação: este painel carrega mock data por padrão. Substitua os conectores pelas suas URLs em `connectToWebSocket()` e `fetchInitialData()` no script.
+    </footer>
+  </div>
+
+  <script>
+    // --- CONFIG ---
+    const WS_PLACEHOLDER = 'ws://seu-servidor/ws/pmtr';
+    const REST_PLACEHOLDER = '/api/trades';
+
+    // --- ESTADO ---
+    let trades = []; // FIFO (max 200)
+    let totalVolume = 0;
+    let ws = null;
+    let liveMock = false;
+    let mockInterval = null;
+
+    // --- Helpers ---
+    function nowTime(){return new Date().toLocaleTimeString();}
+    function rnd(a,b){return Math.round((Math.random()*(b-a)+a)*100)/100}
+    function pushTrade(t){trades.unshift(t); if(trades.length>200) trades.pop(); totalVolume += t.volume; updateUI();}
+
+    // --- Mock data generator ---
+    const COMMS = ['OIL','GAS','LITHIUM','RARE_EARTHS','COPPER','SOY','FERT'];
+    const COUNTRIES = ['Brasil','China','Estados Unidos','Rússia','Chile','Austrália','Índia'];
+    function genMockTrade(){
+      const comm = COMMS[Math.floor(Math.random()*COMMS.length)];
+      const country = COUNTRIES[Math.floor(Math.random()*COUNTRIES.length)];
+      const price = rnd(20,120);
+      const vol = Math.round(Math.random()*1000);
+      return {time: nowTime(), commodity: comm, country, volume: vol, price, counterparty: 'Trader-' + Math.floor(Math.random()*1000)};
+    }
+
+    // --- DOM refs ---
+    const tbody = document.querySelector('#tradeTable tbody');
+    const totalTradesEl = document.getElementById('totalTrades');
+    const metricVol = document.getElementById('metricVol');
+    const metricTrades = document.getElementById('metricTrades');
+    const metricMax = document.getElementById('metricMax');
+    const metricAvg = document.getElementById('metricAvg');
+    const lastUpdate = document.getElementById('lastUpdate');
+    const wsStatus = document.getElementById('wsStatus');
+    const wsDot = document.getElementById('wsDot');
+    const wsUrlEl = document.getElementById('wsUrl');
+
+    // --- Charts ---
+    const priceCtx = document.getElementById('priceChart');
+    const countryCtx = document.getElementById('countryBar');
+
+    const priceChart = new Chart(priceCtx, {
+      type: 'line',
+      data: {labels:[],datasets:[{label:'Composite Price',data:[],tension:0.3,pointRadius:0}]},
+      options:{scales:{x:{display:false},y:{ticks:{callback:v=>v.toFixed(2)}}},plugins:{legend:{display:false}}}
+    });
+
+    const countryChart = new Chart(countryCtx,{
+      type:'bar',data:{labels:COUNTRIES,datasets:[{label:'Volume',data:COUNTRIES.map(()=>0)}]},options:{indexAxis:'y',plugins:{legend:{display:false}}}
+    });
+
+    // --- UI update ---
+    function updateUI(){
+      // Filters
+      const commFilter = document.getElementById('commodityFilter').value;
+      const countryFilter = document.getElementById('countryFilter').value;
+
+      // update table
+      tbody.innerHTML = '';
+      let displayed = 0;
+      let volSum = 0, tradesCount = 0, maxTrade = 0, priceSum = 0;
+      for(const t of trades){
+        if(displayed>=50) break;
+        if(commFilter!=='ALL' && t.commodity!==commFilter) continue;
+        if(countryFilter!=='ALL' && t.country!==countryFilter) continue;
+        const tr = document.createElement('tr');
+        tr.innerHTML = `<td>${t.time}</td><td>${t.commodity}</td><td>${t.country}</td><td>${t.volume.toLocaleString()}</td><td>${t.price.toFixed(2)}</td><td class=\"muted\">${t.counterparty}</td>`;
+        tbody.appendChild(tr);
+        displayed++; volSum += t.volume; tradesCount++; maxTrade = Math.max(maxTrade, t.volume); priceSum += t.price;
+      }
+
+      totalTradesEl.textContent = trades.length;
+      metricVol.textContent = volSum.toLocaleString();
+      metricTrades.textContent = tradesCount;
+      metricMax.textContent = maxTrade>0?maxTrade.toLocaleString():'—';
+      metricAvg.textContent = tradesCount? (priceSum/tradesCount).toFixed(2):'—';
+
+      // update country chart
+      const countryAgg = {};
+      COUNTRIES.forEach(c=>countryAgg[c]=0);
+      trades.forEach(t=>{ if(countryAgg[t.country]!==undefined) countryAgg[t.country]+=t.volume; });
+      countryChart.data.datasets[0].data = COUNTRIES.map(c=>countryAgg[c]);
+      countryChart.update();
+
+      // price series (composite)
+      const composite = trades.slice(0,60).map(t=>t.price);
+      priceChart.data.labels = composite.map((_,i)=>i);
+      priceChart.data.datasets[0].data = composite.reverse();
+      priceChart.update();
+
+      lastUpdate.textContent = new Date().toLocaleString();
+    }
+
+    // --- Connectors ---
+    function connectToWebSocket(url=WS_PLACEHOLDER){
+      if(ws){ws.close(); ws=null;}
+      try{
+        ws = new WebSocket(url);
+        ws.onopen = ()=>{wsStatus.textContent='Conectado'; wsDot.style.background='#34d399'; wsUrlEl.textContent = url};
+        ws.onmessage = (ev)=>{
+          // espera payload JSON: {time,commodity,country,volume,price,counterparty}
+          try{const data=JSON.parse(ev.data); pushTrade(data);}catch(e){console.warn('ws parse',e)}
+        };
+        ws.onclose = ()=>{wsStatus.textContent='Desconectado'; wsDot.style.background='#ef4444'};
+        ws.onerror = ()=>{wsStatus.textContent='Erro'; wsDot.style.background='#f59e0b'};
+      }catch(e){alert('Erro ao conectar WS: '+e.message)}
+    }
+
+    async function fetchInitialData(url=REST_PLACEHOLDER){
+      // Placeholder: tente puxar histórico via fetch. Aqui retornará erro se não tiver endpoint.
+      try{
+        const res = await fetch(url);
+        if(!res.ok) throw new Error('no data');
+        const arr = await res.json();
+        arr.forEach(a=>pushTrade(a));
+      }catch(e){console.log('fetchInitialData: sem endpoint, carregando mock inicial'); for(let i=0;i<30;i++) pushTrade(genMockTrade());}
+    }
+
+    // --- Mock live controls ---
+    document.getElementById('toggleLive').addEventListener('click',()=>{
+      liveMock = !liveMock; document.getElementById('toggleLive').textContent = liveMock? 'Desativar mock live':'Ativar mock live';
+      if(liveMock){ mockInterval = setInterval(()=>{ pushTrade(genMockTrade()); }, 1200); } else { clearInterval(mockInterval); }
+    });
+
+    document.getElementById('connectWS').addEventListener('click',()=>{
+      const url = prompt('Informe WebSocket URL:', WS_PLACEHOLDER) || WS_PLACEHOLDER; connectToWebSocket(url);
+    });
+
+    document.getElementById('exportCSV').addEventListener('click',()=>{
+      const rows = [['time','commodity','country','volume','price','counterparty']]; trades.forEach(t=>rows.push([t.time,t.commodity,t.country,t.volume,t.price,t.counterparty]));
+      const csv = rows.map(r=>r.map(c=>`"${String(c).replace(/"/g,'""')}"`).join(',')).join('\n');
+      const blob = new Blob([csv],{type:'text/csv'}); const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href=url; a.download='pmtr_trades.csv'; a.click(); URL.revokeObjectURL(url);
+    });
+
+    document.getElementById('commodityFilter').addEventListener('change',updateUI);
+    document.getElementById('countryFilter').addEventListener('change',updateUI);
+
+    // --- init ---
+    (async function init(){
+      await fetchInitialData();
+      updateUI();
+    })();
+
+  </script>
+
+  <!--
+    INSTRUÇÕES DE USO:
+    - Este HTML é um painel inicial. Por padrão usa mock data.
+    - Para conectar em tempo real, clique em "Conectar WS" e informe o endpoint WebSocket que joga JSON por mensagem.
+    - Formato esperado por mensagem WS: {time,commodity,country,volume,price,counterparty}
+    - Para puxar histórico via REST, implemente /api/trades que retorne um array de objetos acima.
+    - Customize COMMS e COUNTRIES no início do script conforme sua topologia.
+    - Para produção: adicionar autenticação no WS, TLS, CORS e sanitização das mensagens.
+  -->
+
+  <!-- Popup de Negociação em Tempo Real -->
+  <div id="negotiationPopup" style="position:fixed;bottom:20px;right:20px;background:rgba(15,23,36,0.95);padding:16px;border-radius:12px;box-shadow:0 0 20px rgba(0,0,0,0.5);min-width:260px;display:none;z-index:9999">
+    <div style="font-size:14px;color:#99a0b4">Nova negociação detectada</div>
+    <div id="popupContent" style="margin-top:6px;font-size:15px;font-weight:500"></div>
+  </div>
+
+  <!-- Aba de Conversa entre Países -->
+  <div id="chatPanel" style="position:fixed;left:0;top:0;width:350px;height:100%;background:rgba(11,18,32,0.96);border-right:1px solid rgba(255,255,255,0.05);padding:12px;display:none;z-index:9998">
+    <h2 style="margin:0;font-size:18px">Chat Multilateral</h2>
+    <div class="small">Troca de mensagens entre países e grupos</div>
+
+    <div style="margin-top:14px;display:flex;gap:6px">
+      <button id="btnAllChat">Canal Global</button>
+      <button id="btnNewGroup">Novo Grupo</button>
+    </div>
+
+    <div id="groupList" style="margin-top:10px;font-size:14px;color:#99a0b4"></div>
+
+    <div id="chatWindow" style="margin-top:12px;height:60%;overflow-y:auto;background:rgba(255,255,255,0.02);padding:8px;border-radius:8px"></div>
+
+    <div style="display:flex;gap:6px;margin-top:10px">
+      <input id="chatMessage" placeholder="Mensagem..." style="flex:1" />
+      <button id="sendMessage">Enviar</button>
+    </div>
+  </div>
+
+  <!-- Botão para abrir o chat -->
+  <button id="openChat" style="position:fixed;left:20px;bottom:20px;background:#38bdf8;color:#000;padding:10px 14px;border-radius:10px;font-weight:600;z-index:9999">Chat</button>
+
+  <script>
+    // === POPUP DE NEGOCIAÇÃO ===
+    function showPopup(t){
+      const box = document.getElementById('negotiationPopup');
+      const cont = document.getElementById('popupContent');
+      cont.textContent = `${t.country} negociou ${t.volume} @ ${t.price} (${t.commodity})`;
+      box.style.display = 'block';
+      setTimeout(()=>{ box.style.display = 'none'; }, 5000);
+    }
+
+    // Hook no pushTrade para acionar popup
+    const _oldPush = pushTrade;
+    pushTrade = function(t){ _oldPush(t); showPopup(t); };
+
+    // === CHAT ENTRE PAÍSES ===
+    const chatPanel = document.getElementById('chatPanel');
+    const openChat = document.getElementById('openChat');
+    const chatWindow = document.getElementById('chatWindow');
+    const chatMessage = document.getElementById('chatMessage');
+    const sendMessage = document.getElementById('sendMessage');
+    const groupList = document.getElementById('groupList');
+    const btnAllChat = document.getElementById('btnAllChat');
+    const btnNewGroup = document.getElementById('btnNewGroup');
+
+    let currentGroup = 'GLOBAL';
+    let groups = ['GLOBAL'];
+    let messages = { 'GLOBAL': [] };
+
+    function renderGroups(){ groupList.innerHTML = groups.map(g=>`<div class='groupBtn' data-g='${g}'>${g}</div>`).join(''); }
+    function renderChat(){ chatWindow.innerHTML = messages[currentGroup].map(m=>`<div>[${m.time}] <b>${m.from}:</b> ${m.text}</div>`).join(''); chatWindow.scrollTop = chatWindow.scrollHeight; }
+
+    openChat.onclick = ()=>{ chatPanel.style.display = chatPanel.style.display==='none'?'block':'none'; };
+
+    btnNewGroup.onclick = ()=>{
+      const g = prompt('Nome do novo grupo:');
+      if(!g) return;
+      if(!groups.includes(g)) groups.push(g);
+      messages[g] = [];
+      renderGroups();
+    };
+
+    groupList.onclick = (e)=>{
+      if(e.target.classList.contains('groupBtn')){
+        currentGroup = e.target.dataset.g;
+        renderChat();
+      }
+    };
+
+    btnAllChat.onclick = ()=>{ currentGroup = 'GLOBAL'; renderChat(); };
+
+    sendMessage.onclick = ()=>{
+      const text = chatMessage.value.trim();
+      if(!text) return;
+      const msg = { time: nowTime(), from: 'País-X', text };
+      messages[currentGroup].push(msg);
+      chatMessage.value = '';
+      renderChat();
+    };
+
+    renderGroups(); renderChat();
+  </script>
+
+</body>
+</html>
